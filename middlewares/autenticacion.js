@@ -16,7 +16,7 @@ exports.verificarToken = function(req, res, next){
                 errors: error
             });
         }
-        req.tokenPayLoad = decoded;
+        req.usuario = decoded.usuario;
         next();
     })
 };
