@@ -1,0 +1,9 @@
+id cliente:
+542869240977-gsca3deubmkh40gtpmt1cqau53dtm9rs.apps.googleusercontent.com
+
+secreto cliente
+Xrru_kHXKPRRGTLtUD78gadM
+
+
+definicion servicios
+https://documenter.getpostman.com/view/2300103/S11NMcdo
