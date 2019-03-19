@@ -1,158 +1,235 @@
 var express = require('express');
-var Usuario = require('../models/usuario');
-var bodyParser = require('body-parser');
-var bCryptjs = require('bcryptjs');
+var bcrypt = require('bcryptjs');
 var jwt = require('jsonwebtoken');
-var CONFIG = require('../config/config');
-var SEED = CONFIG.SEED;
 
-//GOOGLE
-
-const CLIENT_ID = CONFIG.GOOGLE_CLIENTID;
-const { OAuth2Client } = require('google-auth-library');
-const client = new OAuth2Client(CLIENT_ID);
+var SEED = require('../config/config').SEED;
 
 var app = express();
-
-// parse application/x-www-form-urlencoded
-app.use(bodyParser.urlencoded({ extended: false }))
-
-// parse application/json
-app.use(bodyParser.json())
+var Usuario = require('../models/usuario');
 
 
-//=============================================================================================
-// AUTENTICACIÓN COMÚN
-//=============================================================================================
+var GoogleAuth = require('google-auth-library');
+var auth = new GoogleAuth;
 
-app.post('/', (req, res) => {
+const GOOGLE_CLIENT_ID = require('../config/config').GOOGLE_CLIENT_ID;
+const GOOGLE_SECRET = require('../config/config').GOOGLE_SECRET;
 
-    var credenciales = req.body;
+var mdAutenticacion = require('../middlewares/autenticacion');
 
-    Usuario.findOne({ email: credenciales.usuario }, (error, usuarioLogueandose) => {
-        if (error) {
-            return res.status(500).json({
-                ok: false,
-                errors: error
-            });
-        }
+// ==========================================
+//  Autenticación De Google
+// ==========================================
 
-        if (!usuarioLogueandose || !bCryptjs.compareSync(credenciales.password, usuarioLogueandose.password)) {
-            return res.status(404).json({
-                ok: false,
-                message: 'Usuario y/o contraseña inválida'
-            });
-        }
+app.get('/renuevatoken', mdAutenticacion.verificaToken, (req, res) => {
 
-        usuarioLogueandose.password = ':)';
-        var token = jwt.sign({
-            usuario: usuarioLogueandose,
-            horaServidorGeneracionToken: new Date()
-        }, SEED, { expiresIn: 14400 });
+    var token = jwt.sign({usuario: req.usuario}, SEED, {expiresIn: 14400});
 
-        return res.status(200).json({
-            ok: true,
-            token: token,
-            id: usuarioLogueandose._id,
-        });
-    })
-})
-
-
-//=============================================================================================
-// AUTENTICACIÓN CON GOOGLE SIGN IN
-//=============================================================================================
-
-app.post('/google', async (req, res) => {
-    const googleToken = req.body.token;
-    const googleUser = await verify(googleToken).catch(error => {
-        return res.status(403).json({
-            ok: false,
-            mensaje: 'Token no válido',
-            errors: error
-        });
+    res.status(200).json({
+        ok: true,
+        usuario: req.usuario,
+        token: token
     });
+})
+// ==========================================
+//  Autenticación De Google
+// ==========================================
+app.post('/google', (req, res) => {
 
-    Usuario.find({ email: googleUser.email }, (error, usuarioEncontrado) => {
-        if (usuarioEncontrado) {
-            if (!usuarioEncontrado.googleAuth) {
+    var token = req.body.token || 'XXX';
+
+
+    var client = new auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_SECRET, '');
+
+    client.verifyIdToken(
+        token,
+        GOOGLE_CLIENT_ID,
+        // Or, if multiple clients access the backend:
+        //[CLIENT_ID_1, CLIENT_ID_2, CLIENT_ID_3],
+        function(e, login) {
+
+            if (e) {
                 return res.status(400).json({
-                    ok: false,
-                    mensaje: 'Debe usar la autenticación común'
-                });
-            } else {
-                usuarioEncontrado.password = ':)';
-                var token = jwt.sign({
-                    usuario: usuarioEncontrado,
-                    horaServidorGeneracionToken: new Date()
-                }, SEED, { expiresIn: 14400 });
-
-                return res.status(200).json({
                     ok: true,
-                    token: token,
-                    id: usuarioEncontrado._id,
+                    mensaje: 'Token no válido',
+                    errors: e
                 });
             }
-        }else{
-            var nuevoUsuario = new Usuario({
-                nombre : googleUser.nombre,
-                email : googleUser.email,
-                password : googleUser.img,
-                password : ':)',
-                googleAuth : true,
-            });
 
-            nuevoUsuario.save((error, usuarioGuardado) => {
-                if (error) {
-                    return res.status(400).json({
-                        ok: false,
-                        mensaje: 'Error creando usuario: ',
-                        errors: error
+
+            var payload = login.getPayload();
+            var userid = payload['sub'];
+            // If request specified a G Suite domain:
+            //var domain = payload['hd'];
+
+            Usuario.findOne({ email: payload.email }, (err, usuario) => {
+
+                if (err) {
+                    return res.status(500).json({
+                        ok: true,
+                        mensaje: 'Error al buscar usuario - login',
+                        errors: err
                     });
                 }
-                var token = jwt.sign({
-                    usuario: usuarioGuardado,
-                    horaServidorGeneracionToken: new Date()
-                }, SEED, { expiresIn: 14400 });
 
-                return res.status(200).json({
-                    ok: true,
-                    token: token,
-                    id: usuarioGuardado._id,
-                });
-        
-        
+                if (usuario) {
+
+                    if (usuario.google === false) {
+                        return res.status(400).json({
+                            ok: true,
+                            mensaje: 'Debe de usar su autenticación normal'
+                        });
+                    } else {
+
+                        usuario.password = ':)';
+
+                        var token = jwt.sign({ usuario: usuario }, SEED, { expiresIn: 14400 }); // 4 horas
+
+                        res.status(200).json({
+                            ok: true,
+                            usuario: usuario,
+                            token: token,
+                            id: usuario._id,
+                            menu: obtenerMenu(usuario.role)
+                        });
+
+                    }
+
+                    // Si el usuario no existe por correo
+                } else {
+
+                    var usuario = new Usuario();
+
+
+                    usuario.nombre = payload.name;
+                    usuario.email = payload.email;
+                    usuario.password = ':)';
+                    usuario.img = payload.picture;
+                    usuario.google = true;
+
+                    usuario.save((err, usuarioDB) => {
+
+                        if (err) {
+                            return res.status(500).json({
+                                ok: true,
+                                mensaje: 'Error al crear usuario - google',
+                                errors: err
+                            });
+                        }
+
+
+                        var token = jwt.sign({ usuario: usuarioDB }, SEED, { expiresIn: 14400 }); // 4 horas
+
+                        res.status(200).json({
+                            ok: true,
+                            usuario: usuarioDB,
+                            token: token,
+                            id: usuarioDB._id,
+                            menu: obtenerMenu(usuarioDB.role)
+                        });
+
+                    });
+
+                }
+
+
             });
-        }
-    });
+
+
+        });
 
 
 
 
-
-    return res.status(200).json({
-        ok: true,
-        googleUser: googleUser
-    });
 });
 
-async function verify(googleToken) {
-    const ticket = await client.verifyIdToken({
-        idToken: googleToken,
-        requiredAudience: CLIENT_ID,  // Specify the CLIENT_ID of the app that accesses the backend
-        // Or, if multiple clients access the backend:
-        //[CLIENT_ID_1, CLIENT_ID_2, CLIENT_ID_3]
-    }).catch(error => {
-        console.log('error---->', error);
-    });
-    const payload = ticket.getPayload();
+// ==========================================
+//  Autenticación normal
+// ==========================================
+app.post('/', (req, res) => {
 
-    return {
-        nombre: payload.nombre,
-        email: payload.email,
-        img: payload.picture,
-        google: true,
-    }
+    var body = req.body;
+
+    Usuario.findOne({ email: body.email }, (err, usuarioDB) => {
+
+        if (err) {
+            return res.status(500).json({
+                ok: false,
+                mensaje: 'Error al buscar usuario',
+                errors: err
+            });
+        }
+
+        if (!usuarioDB) {
+            return res.status(400).json({
+                ok: false,
+                mensaje: 'Credenciales incorrectas - email',
+                errors: err
+            });
+        }
+
+        if (!bcrypt.compareSync(body.password, usuarioDB.password)) {
+            return res.status(400).json({
+                ok: false,
+                mensaje: 'Credenciales incorrectas - password',
+                errors: err
+            });
+        }
+
+        // Crear un token!!!
+        usuarioDB.password = ':)';
+
+        var token = jwt.sign({ usuario: usuarioDB }, SEED, { expiresIn: 14400 }); // 4 horas
+
+        res.status(200).json({
+            ok: true,
+            usuario: usuarioDB,
+            token: token,
+            id: usuarioDB._id,
+            menu: obtenerMenu(usuarioDB.role)
+        });
+
+    })
+
+
+});
+
+
+function obtenerMenu(ROLE) {
+    
+    
+
+   var menu = [
+           {
+             titulo: 'Principal',
+             icono: 'mdi mdi-gauge',
+             submenu: [
+               { titulo: 'Dashboard', url: '/dashboard' },
+               { titulo : 'ProgressBar', url: '/progress' },
+               { titulo: 'Gráficas', url: '/graficas1' },
+               { titulo: 'Promesas', url: '/promesas' },
+               { titulo: 'RxJs', url: '/rxjs' }
+             ]
+           },
+           {
+             titulo: 'Mantenimientos',
+             icono: 'mdi mdi-folder-lock-open',
+             submenu: [
+               //{ titulo: 'Usuarios', url: '/usuarios' },
+               { titulo: 'Hospitales', url: '/hospitales' },
+               { titulo: 'Médicos', url: '/medicos' }
+             ]
+           }
+         ];
+
+         if (ROLE === 'ADMIN_ROLE') {
+            menu[1].submenu.unshift({ titulo: 'Usuarios', url: '/usuarios' });
+        }
+
+    return menu;
 }
+
+
+
+
 
 module.exports = app;

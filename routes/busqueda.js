@@ -1,129 +1,141 @@
 var express = require('express');
-var mongoose = require('mongoose');
-var Hospital = require('../models/hospital');
-var Usuario = require('../models/usuario');
-var Medico = require('../models/medico');
-
 
 var app = express();
 
-app.get('/todo/:busqueda', (req, res, next) => {
+var Hospital = require('../models/hospital');
+var Medico = require('../models/medico');
+var Usuario = require('../models/usuario');
+
+// ==============================
+// Busqueda por colección
+// ==============================
+app.get('/coleccion/:tabla/:busqueda', (req, res) => {
+
     var busqueda = req.params.busqueda;
-    var RegExpHosp = new RegExp(busqueda, 'i');
+    var tabla = req.params.tabla;
+    var regex = new RegExp(busqueda, 'i');
+
+    var promesa;
+
+    switch (tabla) {
+
+        case 'usuarios':
+            promesa = buscarUsuarios(busqueda, regex);
+            break;
+
+        case 'medicos':
+            promesa = buscarMedicos(busqueda, regex);
+            break;
+
+        case 'hospitales':
+            promesa = buscarHospitales(busqueda, regex);
+            break;
+
+        default:
+            return res.status(400).json({
+                ok: false,
+                mensaje: 'Los tipos de busqueda sólo son: usuarios, medicos y hospitales',
+                error: { message: 'Tipo de tabla/coleccion no válido' }
+            });
+
+    }
+
+    promesa.then(data => {
+
+        res.status(200).json({
+            ok: true,
+            [tabla]: data
+        });
+
+    })
+
+});
+
+
+// ==============================
+// Busqueda general
+// ==============================
+app.get('/todo/:busqueda', (req, res, next) => {
+
+    var busqueda = req.params.busqueda;
+    var regex = new RegExp(busqueda, 'i');
 
 
     Promise.all([
-        buscarHospitales(RegExpHosp),
-        buscarMedicos(RegExpHosp),
-        buscarUsuarios(RegExpHosp)
-    ])
+            buscarHospitales(busqueda, regex),
+            buscarMedicos(busqueda, regex),
+            buscarUsuarios(busqueda, regex)
+        ])
         .then(respuestas => {
-            return res.status(200).json({
+
+            res.status(200).json({
                 ok: true,
                 hospitales: respuestas[0],
                 medicos: respuestas[1],
                 usuarios: respuestas[2]
             });
         })
+
+
 });
 
-//=======================================================
-// Busqueda por colección
-//=======================================================
 
-app.get('/coleccion/:tabla/:busqueda', (req, res, next) => {
-   
-    var tabla = req.params.tabla;
-    var terminoBuscado = req.params.busqueda;
-    var promesa;
-
-    var regEx = new RegExp(terminoBuscado, 'i');
-
-
-    switch (tabla) {
-        case 'usuarios':
-            promesa = buscarUsuarios(regEx)
-
-            break;
-        case 'medicos':
-            promesa = buscarMedicos(regEx)
-
-            break;
-        case 'hospitales':
-            promesa = buscarHospitales(regEx)
-            break;
-        default:
-        return res.status(400).json({
-            ok: true,
-            resultado: 'la colección donde está tratando de buscar no existe'
-        });
-            break;
-    }
-
-    promesa.then(( valorEncontrado) => {
-
-        if (valorEncontrado) {
-             return res.status(200).json({
-                 ok: true,
-                 [tabla]: valorEncontrado
-             });
-        }
-
-        return res.status(200).json({
-            ok: true,
-            resultado: 'No se encontró ningún valor'
-        });
-    });
-});
-
-function buscarHospitales(regEx) {
+function buscarHospitales(busqueda, regex) {
 
     return new Promise((resolve, reject) => {
-        Hospital
-        .find({ nombre: regEx })
-        .populate('usuario')
-        .exec((error, hospital) => {
-            if (error)
-                reject('error buscando el hospital', error);
 
-            if (hospital)
-                resolve(hospital);
-        });
-    }
-    );
+        Hospital.find({ nombre: regex })
+            .populate('usuario', 'nombre email')
+            .exec((err, hospitales) => {
 
-}
-
-function buscarMedicos(regEx) {
-
-    return new Promise((resolve, reject) => {
-        Medico
-        .find({ nombre: regEx })
-        .populate('hospital', 'nombre')
-        .populate('usuario', 'nombre email')
-        .exec( (error, medico) => {
-            if (error)
-                reject('error buscando el medico', error);
-            if (medico)
-                resolve(medico);
-        });
-    }
-    );
-
-}
-function buscarUsuarios(regEx) {
-
-    return new Promise((resolve, reject) => {
-        Usuario.find()
-            .or([{ 'nombre': regEx }, { 'email': regEx }])
-            .exec((error, usuario) => {
-                if (error)
-                    reject('error buscando', error);
-                if (usuario)
-                    resolve(usuario);
+                if (err) {
+                    reject('Error al cargar hospitales', err);
+                } else {
+                    resolve(hospitales)
+                }
             });
-    }
-    );
+    });
 }
+
+function buscarMedicos(busqueda, regex) {
+
+    return new Promise((resolve, reject) => {
+
+        Medico.find({ nombre: regex })
+            .populate('usuario', 'nombre email')
+            .populate('hospital')
+            .exec((err, medicos) => {
+
+                if (err) {
+                    reject('Error al cargar medicos', err);
+                } else {
+                    resolve(medicos)
+                }
+            });
+    });
+}
+
+function buscarUsuarios(busqueda, regex) {
+
+    return new Promise((resolve, reject) => {
+
+        Usuario.find({}, 'nombre email role img')
+            .or([{ 'nombre': regex }, { 'email': regex }])
+            .exec((err, usuarios) => {
+
+                if (err) {
+                    reject('Erro al cargar usuarios', err);
+                } else {
+                    resolve(usuarios);
+                }
+
+
+            })
+
+
+    });
+}
+
+
 
 module.exports = app;
